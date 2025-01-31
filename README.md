@@ -872,6 +872,230 @@ These 10 snippets enhance:
 	•	Efficiency in data retrieval (FAISS search, rate limiting).
 	•	Dynamic UI updates (Debouncing, text/image handling).
 
-🚀 Would you like real-time AI text + speech output next? 🎙️
+📌 Addressing AI Hallucination in a RAG System
+
+AI hallucination occurs when the model generates incorrect or fabricated information. In Retrieval-Augmented Generation (RAG), hallucinations can be mitigated by ensuring the AI response is grounded in retrieved data rather than relying on the model’s generative capabilities alone.
+
+Here’s how to reduce hallucination using a combination of Spring Boot, React, and RAG best practices.
+
+📌 1️⃣ Implement Confidence Scoring in Spring Boot
+
+💡 Assigns a confidence score to retrieved results and filters out low-confidence responses.
+
+Modify RagService.java
+
+import java.util.*;
+import org.springframework.stereotype.Service;
+import com.theokanning.openai.service.OpenAiService;
+import com.theokanning.openai.completion.CompletionRequest;
+import faiss.*;
+
+@Service
+public class RagService {
+
+    private final OpenAiService openAiService = new OpenAiService("your-openai-api-key");
+    private final IndexFlatL2 faissIndex;
+
+    public RagService() {
+        int dimension = 384;
+        this.faissIndex = new IndexFlatL2(dimension);
+    }
+
+    public String processQuery(String query) {
+        float[] queryEmbedding = embedQuery(query);
+        int k = 5;
+        float[] distances = new float[k];
+        int[] indices = new int[k];
+        faissIndex.search(1, queryEmbedding, k, distances, indices);
+
+        // Confidence Scoring: Reject irrelevant results
+        double threshold = 0.8;
+        if (distances[0] > threshold) {
+            return "Sorry, I could not find a reliable answer.";
+        }
+
+        String retrievedText = "Relevant documents found...";  // Replace with actual retrieval logic
+
+        CompletionRequest completionRequest = CompletionRequest.builder()
+            .model("gpt-4")
+            .prompt("Answer this strictly based on the retrieved text: " + retrievedText)
+            .maxTokens(100)
+            .build();
+
+        return openAiService.createCompletion(completionRequest).getChoices().get(0).getText();
+    }
+
+    private float[] embedQuery(String query) {
+        return new float[384]; // Replace with actual embedding logic
+    }
+}
+
+✅ Prevents AI from generating answers if the retrieved information has low confidence.
+
+📌 2️⃣ Citation-Based Answers
+
+💡 Ensures the AI only provides information backed by retrieved sources.
+
+Modify RagService.java to return citations
+
+public String processQueryWithCitations(String query) {
+    float[] queryEmbedding = embedQuery(query);
+    int k = 3;
+    float[] distances = new float[k];
+    int[] indices = new int[k];
+    faissIndex.search(1, queryEmbedding, k, distances, indices);
+
+    List<String> sources = Arrays.asList("Source 1", "Source 2", "Source 3");
+
+    String retrievedText = "Relevant information extracted from trusted sources.";
+    CompletionRequest completionRequest = CompletionRequest.builder()
+        .model("gpt-4")
+        .prompt("Answer this strictly based on: " + retrievedText + "\nProvide citations where possible.")
+        .maxTokens(100)
+        .build();
+
+    String response = openAiService.createCompletion(completionRequest).getChoices().get(0).getText();
+
+    return response + "\nSources: " + String.join(", ", sources);
+}
+
+✅ Ensures AI-generated responses include citations.
+
+📌 3️⃣ React: Displaying Source Citations
+
+💡 Shows citations alongside AI responses for user validation.
+
+Modify AIResponse.js
+
+export default function AIResponse({ data }) {
+    return (
+        <div>
+            {data.type === "text" ? (
+                <div>
+                    <p>{data.content}</p>
+                    {data.sources && <p><strong>Sources:</strong> {data.sources.join(", ")}</p>}
+                </div>
+            ) : (
+                <img src={data.content} alt="Generated Image" width="300" />
+            )}
+        </div>
+    );
+}
+
+✅ Improves trust by showing sources for AI-generated responses.
+
+📌 4️⃣ WebSocket Streaming with Citation Verification
+
+💡 Streams AI responses and highlights uncertain statements for user review.
+
+Modify StreamingController.java
+
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import java.io.IOException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+@RestController
+@RequestMapping("/api/stream")
+public class StreamingController {
+
+    private final ExecutorService executor = Executors.newCachedThreadPool();
+
+    @GetMapping("/query")
+    public SseEmitter streamAIResponse(@RequestParam String query) {
+        SseEmitter emitter = new SseEmitter();
+        executor.execute(() -> {
+            try {
+                for (int i = 0; i < 5; i++) {
+                    String chunk = "Chunk " + i + ": AI processing...";
+
+                    if (chunk.contains("probably") || chunk.contains("maybe")) {
+                        chunk = "[⚠️ Unverified] " + chunk;
+                    }
+
+                    emitter.send(chunk);
+                    Thread.sleep(1000);
+                }
+                emitter.complete();
+            } catch (IOException | InterruptedException e) {
+                emitter.completeWithError(e);
+            }
+        });
+        return emitter;
+    }
+}
+
+✅ Flags potential hallucinations in real-time.
+
+📌 5️⃣ Reinforcement Learning with User Feedback
+
+💡 Allows users to mark responses as “Correct” or “Incorrect” to improve accuracy.
+
+Modify FeedbackController.java
+
+import org.springframework.web.bind.annotation.*;
+import java.util.concurrent.ConcurrentHashMap;
+
+@RestController
+@RequestMapping("/api/feedback")
+public class FeedbackController {
+
+    private final ConcurrentHashMap<String, Integer> feedbackStore = new ConcurrentHashMap<>();
+
+    @PostMapping("/submit")
+    public String submitFeedback(@RequestParam String query, @RequestParam boolean isCorrect) {
+        feedbackStore.put(query, feedbackStore.getOrDefault(query, 0) + (isCorrect ? 1 : -1));
+        return "Feedback recorded!";
+    }
+}
+
+✅ Tracks which queries produce unreliable responses for model fine-tuning.
+
+📌 6️⃣ React: User Feedback on AI Accuracy
+
+💡 Allows users to provide feedback on AI responses.
+
+Modify AIResponse.js
+
+import { useState } from "react";
+import axios from "axios";
+
+export default function AIResponse({ query, response }) {
+    const [feedbackGiven, setFeedbackGiven] = useState(false);
+
+    const submitFeedback = async (isCorrect) => {
+        await axios.post("/api/feedback/submit", { query, isCorrect });
+        setFeedbackGiven(true);
+    };
+
+    return (
+        <div>
+            <p>{response}</p>
+            {!feedbackGiven && (
+                <div>
+                    <button onClick={() => submitFeedback(true)}>👍 Correct</button>
+                    <button onClick={() => submitFeedback(false)}>👎 Incorrect</button>
+                </div>
+            )}
+        </div>
+    );
+}
+
+✅ Improves accuracy through human feedback loops.
+
+📌 Summary
+
+Technique	Implementation	Benefit
+Confidence Scoring	Rejects low-confidence results	Prevents misleading answers
+Citation-Based Answers	AI includes sources in responses	Increases trust in AI outputs
+Streaming & Verification	WebSockets stream AI chunks in real-time	Flags uncertain statements
+Reinforcement Learning	Users provide feedback on AI accuracy	Improves long-term model reliability
+
+📌 Next Steps
+	1.	Train AI with Feedback → Store incorrect responses & fine-tune with RLHF.
+	2.	Visual Confidence Indicators → Display confidence scores in UI.
+	3.	Hybrid AI Validation → Combine RAG with knowledge graphs for fact-checking.
+
 
 
